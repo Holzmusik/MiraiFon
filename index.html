@@ -155,6 +155,16 @@ input[type=range]{width:100%;accent-color:var(--acc);height:28px}
       <label>Auth-Token</label>
       <input type="text" id="f-token" placeholder="vom Panel">
     </div>
+    <div class="field">
+      <label>LoxBerry-IP (optional)</label>
+      <input type="text" id="f-bridge" placeholder="für HTTPS/Benachrichtigungen">
+    </div>
+    <p class="hint">
+      Mit LoxBerry-IP läuft die Verbindung verschlüsselt über den LoxBerry
+      (nötig für Benachrichtigungen/Kamera) — beim ersten Mal einmalig dem
+      Zertifikat vertrauen. Ohne läuft's direkt ans Panel (nur im Heimnetz,
+      ohne Benachrichtigungen).
+    </p>
     <button class="btn btn-primary" id="btn-save">Speichern</button>
     <button class="btn btn-ghost" id="btn-cancel">Abbrechen</button>
     <button class="btn btn-danger" id="btn-delete" style="display:none">Panel entfernen</button>
@@ -268,10 +278,11 @@ function escapeHtml(s) {
 function openEdit(id) {
   editingId = id || null;
   const p = editingId ? panels.find(x => x.id === editingId) : null;
-  document.getElementById('f-room').value  = p ? p.room  : '';
-  document.getElementById('f-host').value  = p ? p.host  : '';
-  document.getElementById('f-port').value  = p ? p.port  : 5000;
-  document.getElementById('f-token').value = p ? p.token : '';
+  document.getElementById('f-room').value   = p ? p.room   : '';
+  document.getElementById('f-host').value   = p ? p.host   : '';
+  document.getElementById('f-port').value   = p ? p.port   : 5000;
+  document.getElementById('f-token').value  = p ? p.token  : '';
+  document.getElementById('f-bridge').value = p ? (p.bridge || '') : '';
   document.getElementById('btn-delete').style.display = p ? 'block' : 'none';
   showScreen('screen-edit');
 }
@@ -280,17 +291,18 @@ document.getElementById('btn-add').addEventListener('click', () => openEdit(null
 document.getElementById('btn-cancel').addEventListener('click', () => showScreen('screen-list'));
 
 document.getElementById('btn-save').addEventListener('click', () => {
-  const room  = document.getElementById('f-room').value.trim();
-  const host  = document.getElementById('f-host').value.trim();
-  const port  = parseInt(document.getElementById('f-port').value, 10) || 5000;
-  const token = document.getElementById('f-token').value.trim();
+  const room   = document.getElementById('f-room').value.trim();
+  const host   = document.getElementById('f-host').value.trim();
+  const port   = parseInt(document.getElementById('f-port').value, 10) || 5000;
+  const token  = document.getElementById('f-token').value.trim();
+  const bridge = document.getElementById('f-bridge').value.trim();
   if (!room || !host) { toast('Raumname und Host/IP werden benötigt'); return; }
 
   if (editingId) {
     const p = panels.find(x => x.id === editingId);
-    Object.assign(p, { room, host, port, token });
+    Object.assign(p, { room, host, port, token, bridge });
   } else {
-    panels.push({ id: 'p' + Date.now(), room, host, port, token });
+    panels.push({ id: 'p' + Date.now(), room, host, port, token, bridge });
   }
   savePanels();
   renderList();
@@ -376,10 +388,11 @@ function handleScannedCode(raw) {
     showScreen('screen-edit');
     return;
   }
-  document.getElementById('f-room').value  = data.room || '';
-  document.getElementById('f-host').value  = data.host;
-  document.getElementById('f-port').value  = data.port || 5000;
-  document.getElementById('f-token').value = data.token;
+  document.getElementById('f-room').value   = data.room || '';
+  document.getElementById('f-host').value   = data.host;
+  document.getElementById('f-port').value   = data.port || 5000;
+  document.getElementById('f-token').value  = data.token;
+  document.getElementById('f-bridge').value = data.bridge || '';
   toast('Panel erkannt: ' + (data.room || data.host));
   showScreen('screen-edit');
 }
@@ -439,7 +452,15 @@ function startStream() {
   gainNode.connect(audioCtx.destination);
   nextStartTime = audioCtx.currentTime;
 
-  const url = `ws://${p.host}:${p.port}/api/babyfon/stream?token=${encodeURIComponent(p.token)}`;
+  // Mit bekannter LoxBerry-IP (aus QR-Scan oder manuell eingetragen): Weg
+  // ueber den verschluesselten wss-Proxy im MiraiBridge-Plugin (Port 8443,
+  // siehe bin/bridge.js startBabyfonWssProxy) - noetig, wenn die App selbst
+  // ueber HTTPS laeuft (Mixed Content wuerde sonst blockiert). Ohne
+  // LoxBerry-IP: direkte Klartext-Verbindung wie bisher (nur im Heimnetz,
+  // dafuer ohne Umweg).
+  const url = p.bridge
+    ? `wss://${p.bridge}:8443/babyfon?panel=${encodeURIComponent(p.host)}&port=${p.port}&token=${encodeURIComponent(p.token)}`
+    : `ws://${p.host}:${p.port}/api/babyfon/stream?token=${encodeURIComponent(p.token)}`;
   ws = new WebSocket(url);
   ws.binaryType = 'arraybuffer';
 
