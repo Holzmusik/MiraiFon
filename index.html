@@ -130,9 +130,13 @@ input[type=range]{width:100%;accent-color:var(--acc);height:28px}
   </section>
 
   <!-- ══════════ Screen: Panel hinzufuegen/bearbeiten ══════════ -->
-  <!-- QR-Kopplung folgt, sobald das Panel einen Pairing-QR-Code anzeigen kann
-       (siehe Projekt-Notizen) - bis dahin/als Fallback: manuelle Eingabe. -->
   <section class="screen" id="screen-edit">
+    <button class="btn btn-primary" id="btn-scan-qr" style="margin-bottom:18px">📷 QR-Code am Panel scannen</button>
+    <p class="hint" id="scan-only-hint" style="margin-top:-10px">
+      Panel: Einstellungen → "MiraiFon koppeln" → mit der Kamera scannen.
+      Oder darunter manuell eintragen.
+    </p>
+
     <div class="field">
       <label>Raumname</label>
       <input type="text" id="f-room" placeholder="Kinderzimmer">
@@ -151,15 +155,17 @@ input[type=range]{width:100%;accent-color:var(--acc);height:28px}
       <label>Auth-Token</label>
       <input type="text" id="f-token" placeholder="vom Panel">
     </div>
-    <p class="hint">
-      Diese Werte kommen später automatisch per QR-Code-Kopplung direkt vom
-      Panel-Display. Bis dahin: im Panel unter Einstellungen &rarr; Netzwerk
-      nachsehen (gleiche IP wie die Web-Oberfläche des Panels) und das
-      Auth-Token dort übernehmen.
-    </p>
     <button class="btn btn-primary" id="btn-save">Speichern</button>
     <button class="btn btn-ghost" id="btn-cancel">Abbrechen</button>
     <button class="btn btn-danger" id="btn-delete" style="display:none">Panel entfernen</button>
+  </section>
+
+  <!-- ══════════ Screen: QR-Scan (Kamera) ══════════ -->
+  <section class="screen" id="screen-scan">
+    <video id="scan-video" autoplay playsinline muted
+           style="width:100%;border-radius:12px;background:#000"></video>
+    <p class="hint" id="scan-status">Kamera wird gestartet…</p>
+    <button class="btn btn-ghost" id="btn-scan-cancel">Abbrechen</button>
   </section>
 
   <!-- ══════════ Screen: Player ══════════ -->
@@ -217,6 +223,9 @@ function showScreen(id) {
   } else if (id === 'screen-player') {
     back.style.visibility = 'visible';
     title.textContent = 'Babyfon';
+  } else if (id === 'screen-scan') {
+    back.style.visibility = 'visible';
+    title.textContent = 'QR-Code scannen';
   }
 }
 
@@ -297,7 +306,88 @@ document.getElementById('btn-delete').addEventListener('click', () => {
 
 document.getElementById('btn-back').addEventListener('click', () => {
   stopStream();
+  stopQrScan();
   showScreen('screen-list');
+});
+
+// ── QR-Kopplung (Kamera) ────────────────────────────────────
+// Erwartetes Format vom Panel (siehe MiraiPanel.yaml show_pairing_qr):
+// {"room":"...","host":"...","port":5000,"token":"..."}
+// Nutzt die native BarcodeDetector-API (Chrome/Android) - kein zusaetzliches
+// JS-Scan-Paket eingebunden, um die App schlank zu halten. iOS Safari
+// unterstuetzt BarcodeDetector nicht; dort bleibt die manuelle Eingabe
+// darunter der einzige Weg, bis das ggf. mal eine eigene Bibliothek braucht.
+let scanStream = null;
+let scanRafId = null;
+let barcodeDetector = null;
+
+async function startQrScan() {
+  showScreen('screen-scan');
+  const statusEl = document.getElementById('scan-status');
+
+  if (!('BarcodeDetector' in window)) {
+    statusEl.textContent = 'QR-Scan wird von diesem Browser leider nicht unterstützt — bitte unten manuell eintragen.';
+    return;
+  }
+  if (!barcodeDetector) {
+    try { barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] }); }
+    catch (e) { statusEl.textContent = 'QR-Scan konnte nicht gestartet werden.'; return; }
+  }
+
+  try {
+    scanStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment' }
+    });
+  } catch (e) {
+    statusEl.textContent = 'Kein Kamera-Zugriff (Berechtigung erteilt?).';
+    return;
+  }
+
+  const video = document.getElementById('scan-video');
+  video.srcObject = scanStream;
+  statusEl.textContent = 'QR-Code am Panel in den Rahmen halten…';
+
+  const scanLoop = async () => {
+    if (!scanStream) return; // abgebrochen
+    try {
+      const codes = await barcodeDetector.detect(video);
+      if (codes.length > 0) { handleScannedCode(codes[0].rawValue); return; }
+    } catch (e) { /* einzelner Frame fehlgeschlagen - naechster Versuch */ }
+    scanRafId = requestAnimationFrame(scanLoop);
+  };
+  scanRafId = requestAnimationFrame(scanLoop);
+}
+
+function stopQrScan() {
+  if (scanRafId) { cancelAnimationFrame(scanRafId); scanRafId = null; }
+  if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
+}
+
+function handleScannedCode(raw) {
+  stopQrScan();
+  let data;
+  try { data = JSON.parse(raw); } catch (e) {
+    toast('QR-Code gehört nicht zu MiraiFon');
+    showScreen('screen-edit');
+    return;
+  }
+  if (!data.host || !data.token) {
+    toast('QR-Code unvollständig');
+    showScreen('screen-edit');
+    return;
+  }
+  document.getElementById('f-room').value  = data.room || '';
+  document.getElementById('f-host').value  = data.host;
+  document.getElementById('f-port').value  = data.port || 5000;
+  document.getElementById('f-token').value = data.token;
+  toast('Panel erkannt: ' + (data.room || data.host));
+  showScreen('screen-edit');
+}
+
+document.getElementById('btn-scan-qr').addEventListener('click', startQrScan);
+document.getElementById('btn-scan-cancel').addEventListener('click', () => {
+  stopQrScan();
+  showScreen('screen-edit');
 });
 
 // ── Player: Audio-Streaming ────────────────────────────────
